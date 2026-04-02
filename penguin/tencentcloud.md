@@ -66,12 +66,22 @@ while the JWT supplies additional provisioning limits.
 
 - **Method:** `GET`
 - **Path:** `/tencentcloud/bandwidth-packages`
-- **Description:** Returns the schedulable shared bandwidth package in the region with the highest available capacity. The service queries Tencent Cloud `DescribeBandwidthPackages` with filters `tag:penguin=schedulable` and `network-type=<networkType>` (defaults to `BGP` when omitted). Candidates must be in a usable status and have fewer than 200 bound resources. The response includes the bandwidth package ID and `availableCount = 200 - len(ResourceSet)`; ties are broken by choosing the lexicographically smallest ID.
+- **Description:** Returns the schedulable shared bandwidth package in the region with the highest available capacity. The service queries Tencent Cloud `DescribeBandwidthPackages` with filters `tag:penguin=<tag>` and `network-type=<networkType>` (defaults to `BGP` when omitted). Candidates must be in a usable status and have fewer than 200 bound resources. The response includes the bandwidth package ID and `availableCount = 200 - len(ResourceSet)`.
+
+The `sharedBandwidthPackageId` query parameter supports the following selector syntax:
+
+- **Omitted or empty string** – service auto-selects from `tag:penguin=schedulable`, choosing the package with the highest available capacity; ties are broken by lexicographically smallest ID.
+- **`@tagName`** – service auto-selects from `tag:penguin=<tagName>`, choosing the package with the highest available capacity; ties are broken by lexicographically smallest ID.
+- **Explicit ID (does not start with `@`)** – service queries the exact package by ID and returns its availability under the specified `networkType`. Returns `503` if the package does not exist, is not available, or has no remaining capacity.
+- **`@` (lone at-sign)** – returns `400 Bad Request` (invalid selector).
+
+For the `penguin_tencentcloud_bandwidth_package_selection` Terraform resource, omitting `shared_bandwidth_package_id` and setting it to the empty string `""` produce the same selection behavior. Whitespace-only values, or values with leading or trailing whitespace, are rejected during `terraform plan` instead of being trimmed by the provider.
 
 #### Query Parameters
 
 - `region` (required): Tencent Cloud region, e.g. `ap-guangzhou`.
 - `networkType` (optional): Tencent Cloud network type, e.g. `BGP` or `CMCC` (defaults to `BGP`).
+- `sharedBandwidthPackageId` (optional): Selector for bandwidth package auto-selection or explicit lookup; see selector syntax above.
 
 #### Successful Response
 
@@ -84,9 +94,9 @@ while the JWT supplies additional provisioning limits.
 
 #### Error Codes
 
-- `400 Bad Request` – missing or invalid query parameters.
+- `400 Bad Request` – missing or invalid query parameters; or selector is a lone `@`.
 - `502 Bad Gateway` – Tencent Cloud API query failed (message includes “failed to query bandwidth packages”).
-- `503 Service Unavailable` – no schedulable bandwidth package available (message includes “no schedulable bandwidth package available”).
+- `503 Service Unavailable` – no schedulable bandwidth package available matching the selector (message includes “no schedulable bandwidth package available”).
 
 ### Create Virtual Machine
 
@@ -117,12 +127,14 @@ When a valid JWT accompanies the request, the following claims are enforced:
 - `projectId`: overrides the request body `projectId` (and is persisted in the
   Tencent API call) regardless of the user supplied value.
 
-When `sharedBandwidthPackageId` is omitted or空字符串，服务会自动调用
-`DescribeBandwidthPackages(Limit=100, NetworkType=BGP)`，仅挑选带标签
-`penguin: schedulable`、状态为 `AVAILABLE` 且已绑定资源数小于 200 的带宽包。
-若存在多个候选，按照 `BandwidthPackageId` 升序取第一个。查询失败会返回
-`502` 并提示 “failed to query bandwidth packages”，缺少可用带宽包时返回
-`503` 并提示 “no schedulable bandwidth package available”。
+The `sharedBandwidthPackageId` field supports a selector syntax (leading/trailing whitespace is trimmed):
+
+- **Omitted, empty string, or when `elasticIpId` is provided** – the field is ignored. When no `elasticIpId` is provided, the service auto-selects from `tag:penguin=schedulable`, choosing the package with the lexicographically smallest `BandwidthPackageId` among available candidates.
+- **`@tagName`** – service auto-selects from `tag:penguin=<tagName>`, choosing the package with the lexicographically smallest `BandwidthPackageId` among available candidates.
+- **Explicit ID (does not start with `@`)** – the value is passed directly to Tencent Cloud as the bandwidth package ID; no auto-selection is performed.
+- **`@` (lone at-sign)** – returns `400 Bad Request` (invalid selector).
+
+Candidates for auto-selection must be in a usable status and have fewer than 200 bound resources. Query failures return `502` with message "failed to query bandwidth packages"; no available package returns `503` with message "no schedulable bandwidth package available".
 
 Requests without a JWT behave identically to previous releases.
 
@@ -162,8 +174,10 @@ Requests without a JWT behave identically to previous releases.
 #### Error Codes
 
 - `400 Bad Request` – payload validation failed (missing fields, invalid FQDN,
-  cloud-init payload exceeds 16 KB, etc.).
-- `500 Internal Server Error` – upstream Tencent Cloud request failed.
+  cloud-init payload exceeds 16 KB, etc.), or `sharedBandwidthPackageId` is a lone `@`.
+- `502 Bad Gateway` – Tencent Cloud bandwidth package lookup failed.
+- `503 Service Unavailable` – no schedulable bandwidth package matched the selector.
+- `500 Internal Server Error` – other upstream Tencent Cloud requests failed.
 
 When providing `elasticIpId`, omit `sharedBandwidthPackageId` and
 `bandwidthLimit`. The service will bind the supplied elastic IP to the newly
@@ -193,10 +207,15 @@ usage in the database and initializes new instances with `usedTransfer`,
 - **Description:** Allocates a new elastic public IP address in the specified
   region. The service applies Tencent Cloud defaults for the address type
   (`EIP`), provider (`BGP`), and internet charge mode (`BANDWIDTH_PACKAGE`).
-  When `sharedBandwidthPackageId` is omitted, Penguin automatically queries
-  schedulable shared bandwidth packages in the region (tagged
-  `tag:penguin=schedulable`) and attaches the lowest-ID package with available
-  capacity.
+
+The `sharedBandwidthPackageId` field supports a selector syntax (leading/trailing whitespace is trimmed):
+
+- **Omitted or empty string** – service auto-selects from `tag:penguin=schedulable`, choosing the package with the lexicographically smallest `BandwidthPackageId` among available candidates.
+- **`@tagName`** – service auto-selects from `tag:penguin=<tagName>`, choosing the package with the lexicographically smallest `BandwidthPackageId` among available candidates.
+- **Explicit ID (does not start with `@`)** – the value is passed directly to Tencent Cloud as the bandwidth package ID; no auto-selection is performed.
+- **`@` (lone at-sign)** – returns `400 Bad Request` (invalid selector).
+
+Candidates for auto-selection must be in a usable status and have fewer than 200 bound resources. Query failures return `502` with message "failed to query bandwidth packages"; no available package returns `503` with message "no schedulable bandwidth package available".
 
 #### Request Body
 
@@ -208,8 +227,6 @@ usage in the database and initializes new instances with `usedTransfer`,
 }
 ```
 
-Optionally include `sharedBandwidthPackageId` to force a specific shared
-bandwidth package instead of the automatically selected one.
 
 #### Successful Response
 
@@ -222,9 +239,10 @@ bandwidth package instead of the automatically selected one.
 
 #### Error Codes
 
-- `400 Bad Request` – payload validation failed or the JSON body is invalid.
-- `500 Internal Server Error` – Tencent Cloud API returned an error or
-  responded with an unexpected payload.
+- `400 Bad Request` – payload validation failed, the JSON body is invalid, or `sharedBandwidthPackageId` is a lone `@`.
+- `502 Bad Gateway` – Tencent Cloud bandwidth package lookup failed.
+- `503 Service Unavailable` – no schedulable bandwidth package matched the selector.
+- `500 Internal Server Error` – other Tencent Cloud API errors or unexpected payloads.
 
 ### Delete Elastic IP
 
@@ -300,10 +318,18 @@ bandwidth package instead of the automatically selected one.
   The job releases any non-cascading elastic IPs before deleting the instance.
   If the Tencent Cloud instance no longer exists, Penguin simply removes its
   record and still completes successfully.
+  When `force=true` and the instance is prepaid (`PREPAID`), the deletion worker
+  calls Tencent Cloud `TerminateInstances` twice: the first call moves the
+  instance into the recycle bin, the second call permanently deletes it.
 
 #### Path Parameters
 
 - `id` – Identifier returned by the create endpoint (UUID v4 string).
+
+#### Query Parameters
+
+- `force` (optional, default `false`) – when `true`, prepaid instances are
+  terminated twice to ensure permanent deletion.
 
 #### Responses
 
@@ -412,11 +438,37 @@ bandwidth package instead of the automatically selected one.
 - `409 Conflict` – renewal rejected (e.g. instance not in prepaid mode or expiration unchanged).
 - `500 Internal Server Error` – Tencent Cloud API returned an error.
 
+### Update Virtual Machine Total Transfer
+
+- **Method:** `POST`
+- **Path:** `/tencentcloud/vms/:id/total-transfer`
+- **Description:** Updates the tracked `totalTransfer` quota for the specified VM.
+  Set `totalTransfer` to `-1` to remove the quota. When changing a VM from an
+  unlimited quota to a finite quota, Penguin restores the default stop mode so
+  transfer enforcement becomes active again.
+
+#### Path Parameters
+
+- `id` – Identifier returned by the create endpoint (UUID v4 string).
+
+#### Request Body
+
+```json
+{ "totalTransfer": 1048576 }
+```
+
+#### Responses
+
+- `204 No Content` – quota updated successfully.
+- `400 Bad Request` – invalid identifier or payload.
+- `404 Not Found` – the virtual machine record does not exist.
+- `500 Internal Server Error` – the local virtual machine record could not be updated.
+
 ### Get Virtual Machine Status
 
 - **Method:** `GET`
 - **Path:** `/tencentcloud/vms/:id/status`
-- **Description:** Returns the tracked transfer usage together with the latest CVM instance metadata and power state. Directional fields `txTransfer` (upload) and `rxTransfer` (download) are included; `usedTransfer` remains the sum for backward compatibility. When Penguin has suspended the instance after exceeding its transfer quota, the `instanceState` field is reported as `SuspendOverUsage`.
+- **Description:** Returns the tracked transfer usage together with the latest CVM instance metadata, configured bandwidth size, and power state. Directional fields `txTransfer` (upload) and `rxTransfer` (download) are included; `usedTransfer` remains the sum for backward compatibility. When Penguin has suspended the instance after exceeding its transfer quota, the `instanceState` field is reported as `SuspendOverUsage`.
 
 #### Successful Response
 
@@ -444,6 +496,7 @@ bandwidth package instead of the automatically selected one.
   "txTransfer": 400000,
   "rxTransfer": 112000,
   "remainingTransfer": 536576,
+  "bandwidthLimit": 80,
   "password": "StatusPass1",
   "defaultLoginUser": "root"
 }

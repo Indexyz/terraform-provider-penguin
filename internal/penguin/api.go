@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 func (c *Client) Health(ctx context.Context) error {
@@ -30,11 +31,14 @@ func (c *Client) ListZones(ctx context.Context) ([]Zone, error) {
 	return out.Zones, nil
 }
 
-func (c *Client) SelectBandwidthPackage(ctx context.Context, region string, networkType string) (*BandwidthPackageSelectionResponse, error) {
+func (c *Client) SelectBandwidthPackage(ctx context.Context, region string, networkType string, sharedBandwidthPackageID string) (*BandwidthPackageSelectionResponse, error) {
 	query := url.Values{}
 	query.Set("region", region)
 	if networkType != "" {
 		query.Set("networkType", networkType)
+	}
+	if selector := strings.TrimSpace(sharedBandwidthPackageID); selector != "" {
+		query.Set("sharedBandwidthPackageId", selector)
 	}
 
 	var out BandwidthPackageSelectionResponse

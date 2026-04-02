@@ -85,7 +85,7 @@ func (d *TencentCloudBandwidthPackageDataSource) Read(ctx context.Context, req d
 		return
 	}
 
-	out, err := d.client.SelectBandwidthPackage(ctx, region, strings.TrimSpace(config.NetworkType.ValueString()))
+	out, err := d.client.SelectBandwidthPackage(ctx, region, strings.TrimSpace(config.NetworkType.ValueString()), "")
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to select bandwidth package", err.Error())
 		return

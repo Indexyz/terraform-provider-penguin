@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -12,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	schemavalidator "github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/indexyz/terraform-provider-penguin/internal/penguin"
 )
@@ -30,11 +32,12 @@ type TencentCloudBandwidthPackageSelectionResource struct {
 }
 
 type TencentCloudBandwidthPackageSelectionResourceModel struct {
-	ID                 types.String `tfsdk:"id"`
-	Region             types.String `tfsdk:"region"`
-	NetworkType        types.String `tfsdk:"network_type"`
-	BandwidthPackageID types.String `tfsdk:"bandwidth_package_id"`
-	AvailableCount     types.Int64  `tfsdk:"available_count"`
+	ID                       types.String `tfsdk:"id"`
+	Region                   types.String `tfsdk:"region"`
+	NetworkType              types.String `tfsdk:"network_type"`
+	SharedBandwidthPackageID types.String `tfsdk:"shared_bandwidth_package_id"`
+	BandwidthPackageID       types.String `tfsdk:"bandwidth_package_id"`
+	AvailableCount           types.Int64  `tfsdk:"available_count"`
 }
 
 func (r *TencentCloudBandwidthPackageSelectionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -57,6 +60,11 @@ func (r *TencentCloudBandwidthPackageSelectionResource) Schema(ctx context.Conte
 				Optional:      true,
 				Computed:      true,
 				Default:       stringdefault.StaticString("BGP"),
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"shared_bandwidth_package_id": schema.StringAttribute{
+				Optional:      true,
+				Validators:    []schemavalidator.String{sharedBandwidthPackageSelectorValidator{}},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"bandwidth_package_id": schema.StringAttribute{
@@ -85,8 +93,8 @@ func (r *TencentCloudBandwidthPackageSelectionResource) Create(ctx context.Conte
 		return
 	}
 
-	if plan.Region.IsUnknown() || plan.NetworkType.IsUnknown() {
-		resp.Diagnostics.AddError("Unknown configuration", "`region` and `network_type` must be known during planning.")
+	if plan.Region.IsUnknown() || plan.NetworkType.IsUnknown() || plan.SharedBandwidthPackageID.IsUnknown() {
+		resp.Diagnostics.AddError("Unknown configuration", "`region`, `network_type`, and `shared_bandwidth_package_id` must be known during planning.")
 		return
 	}
 
@@ -101,21 +109,65 @@ func (r *TencentCloudBandwidthPackageSelectionResource) Create(ctx context.Conte
 		networkType = "BGP"
 	}
 
-	out, err := r.client.SelectBandwidthPackage(ctx, region, networkType)
+	sharedBandwidthPackageID := plan.SharedBandwidthPackageID.ValueString()
+
+	out, err := r.client.SelectBandwidthPackage(ctx, region, networkType, sharedBandwidthPackageID)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to select bandwidth package", err.Error())
 		return
 	}
 
 	state := TencentCloudBandwidthPackageSelectionResourceModel{
-		ID:                 types.StringValue(out.ID),
-		Region:             types.StringValue(region),
-		NetworkType:        types.StringValue(networkType),
-		BandwidthPackageID: types.StringValue(out.ID),
-		AvailableCount:     types.Int64Value(out.AvailableCount),
+		ID:                       types.StringValue(out.ID),
+		Region:                   types.StringValue(region),
+		NetworkType:              types.StringValue(networkType),
+		SharedBandwidthPackageID: plan.SharedBandwidthPackageID,
+		BandwidthPackageID:       types.StringValue(out.ID),
+		AvailableCount:           types.Int64Value(out.AvailableCount),
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+type sharedBandwidthPackageSelectorValidator struct{}
+
+func (sharedBandwidthPackageSelectorValidator) Description(context.Context) string {
+	return "must be empty or set to a selector without leading or trailing whitespace"
+}
+
+func (sharedBandwidthPackageSelectorValidator) MarkdownDescription(context.Context) string {
+	return "must be empty or set to a selector without leading or trailing whitespace"
+}
+
+func (sharedBandwidthPackageSelectorValidator) ValidateString(ctx context.Context, req schemavalidator.StringRequest, resp *schemavalidator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+
+	if _, err := canonicalSharedBandwidthPackageSelector(req.ConfigValue); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid shared bandwidth package selector", err.Error())
+	}
+}
+
+func canonicalSharedBandwidthPackageSelector(value types.String) (string, error) {
+	if value.IsNull() {
+		return "", nil
+	}
+
+	raw := value.ValueString()
+	if raw == "" {
+		return "", nil
+	}
+
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("`shared_bandwidth_package_id` must not be only whitespace")
+	}
+	if raw != trimmed {
+		return "", fmt.Errorf("`shared_bandwidth_package_id` must not include leading or trailing whitespace")
+	}
+
+	return trimmed, nil
 }
 
 func (r *TencentCloudBandwidthPackageSelectionResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

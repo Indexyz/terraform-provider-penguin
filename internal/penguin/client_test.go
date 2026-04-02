@@ -131,40 +131,78 @@ func TestClient_ErrorResponse(t *testing.T) {
 func TestClient_SelectBandwidthPackage(t *testing.T) {
 	t.Parallel()
 
-	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/tencentcloud/bandwidth-packages" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("region"); got != "ap-guangzhou" {
-			t.Fatalf("unexpected region: %q", got)
-		}
-		if got := r.URL.Query().Get("networkType"); got != "BGP" {
-			t.Fatalf("unexpected networkType: %q", got)
-		}
+	t.Run("includes selector when provided", func(t *testing.T) {
+		transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/tencentcloud/bandwidth-packages" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("region"); got != "ap-guangzhou" {
+				t.Fatalf("unexpected region: %q", got)
+			}
+			if got := r.URL.Query().Get("networkType"); got != "BGP" {
+				t.Fatalf("unexpected networkType: %q", got)
+			}
+			if got := r.URL.Query().Get("sharedBandwidthPackageId"); got != "@blue" {
+				t.Fatalf("unexpected sharedBandwidthPackageId: %q", got)
+			}
 
-		payload, _ := json.Marshal(BandwidthPackageSelectionResponse{
-			ID:             "bwp-123",
-			AvailableCount: 190,
+			payload, _ := json.Marshal(BandwidthPackageSelectionResponse{
+				ID:             "bwp-123",
+				AvailableCount: 190,
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(payload)),
+			}, nil
 		})
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(bytes.NewReader(payload)),
-		}, nil
+
+		client, err := NewClient("http://example.com", "", "", ClientOptions{
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		if err != nil {
+			t.Fatalf("NewClient error: %v", err)
+		}
+
+		out, err := client.SelectBandwidthPackage(context.Background(), "ap-guangzhou", "BGP", "@blue")
+		if err != nil {
+			t.Fatalf("SelectBandwidthPackage error: %v", err)
+		}
+		if out.ID != "bwp-123" || out.AvailableCount != 190 {
+			t.Fatalf("unexpected response: %#v", out)
+		}
 	})
 
-	client, err := NewClient("http://example.com", "", "", ClientOptions{
-		HTTPClient: &http.Client{Transport: transport},
-	})
-	if err != nil {
-		t.Fatalf("NewClient error: %v", err)
-	}
+	t.Run("omits selector when blank", func(t *testing.T) {
+		transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			if _, ok := r.URL.Query()["sharedBandwidthPackageId"]; ok {
+				t.Fatalf("expected sharedBandwidthPackageId to be omitted, got query %q", r.URL.RawQuery)
+			}
 
-	out, err := client.SelectBandwidthPackage(context.Background(), "ap-guangzhou", "BGP")
-	if err != nil {
-		t.Fatalf("SelectBandwidthPackage error: %v", err)
-	}
-	if out.ID != "bwp-123" || out.AvailableCount != 190 {
-		t.Fatalf("unexpected response: %#v", out)
-	}
+			payload, _ := json.Marshal(BandwidthPackageSelectionResponse{
+				ID:             "bwp-456",
+				AvailableCount: 180,
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(payload)),
+			}, nil
+		})
+
+		client, err := NewClient("http://example.com", "", "", ClientOptions{
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		if err != nil {
+			t.Fatalf("NewClient error: %v", err)
+		}
+
+		out, err := client.SelectBandwidthPackage(context.Background(), "ap-guangzhou", "BGP", "   ")
+		if err != nil {
+			t.Fatalf("SelectBandwidthPackage error: %v", err)
+		}
+		if out.ID != "bwp-456" || out.AvailableCount != 180 {
+			t.Fatalf("unexpected response: %#v", out)
+		}
+	})
 }
